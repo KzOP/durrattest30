@@ -21,11 +21,28 @@ type FirestoreDocument = {
 
 type RentPeriod = 'monthly' | 'annual' | 'two_installments';
 
-const PRODUCTION_APP_URL = 'https://durrattest23.vercel.app';
+const PRODUCTION_APP_URL = 'https://durrattest25.vercel.app';
 const TELEGRAM_CAPTION_LIMIT = 1024;
 
-const FIXED_BOT_TOKEN = '8976569747:AAGpQBVcgO-kBEc7FNW9KZdvzTvnE-PF1js';
-const FIXED_CHAT_ID = '@durrattest';
+// القيم الاحتياطية (تُستخدم فقط إذا لم تُضبط متغيرات البيئة في Vercel)
+const FALLBACK_BOT_TOKEN = '8976569747:AAGpQBVcgO-kBEc7FNW9KZdvzTvnE-PF1js';
+const FALLBACK_CHAT_ID = '@durrattest';
+
+type TelegramTarget = { botToken: string; chatId: string };
+
+function telegramTargetFor(isRent: boolean): TelegramTarget {
+  const env = process.env;
+  if (isRent) {
+    return {
+      botToken: (env.TELEGRAM_RENT_BOT_TOKEN || '').trim() || FALLBACK_BOT_TOKEN,
+      chatId: (env.TELEGRAM_RENT_CHAT_ID || '').trim() || FALLBACK_CHAT_ID,
+    };
+  }
+  return {
+    botToken: (env.TELEGRAM_SALE_BOT_TOKEN || '').trim() || FALLBACK_BOT_TOKEN,
+    chatId: (env.TELEGRAM_SALE_CHAT_ID || '').trim() || FALLBACK_CHAT_ID,
+  };
+}
 
 const rentPeriodPriceText: Record<RentPeriod, string> = {
   monthly: 'شهرياً',
@@ -191,18 +208,31 @@ function parseBody(body: unknown): Record<string, unknown> | null {
   }
 }
 
-async function sendTelegram(botToken: string, method: 'sendPhoto' | 'sendMessage', payload: Record<string, unknown>) {
+type TelegramResult = { ok: boolean; error?: string };
+
+async function sendTelegram(botToken: string, method: 'sendPhoto' | 'sendMessage', payload: Record<string, unknown>): Promise<TelegramResult> {
   try {
     const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const result = await response.json().catch(() => ({})) as { ok?: boolean };
-    return response.ok && result.ok === true;
-  } catch {
-    return false;
+    const result = await response.json().catch(() => ({})) as { ok?: boolean; description?: string };
+    if (response.ok && result.ok === true) return { ok: true };
+    const error = `${method}: ${result.description || `HTTP ${response.status}`}`;
+    console.error('Telegram error', error);
+    return { ok: false, error };
+  } catch (err) {
+    const error = `${method}: ${String(err)}`;
+    console.error('Telegram fetch failed', error);
+    return { ok: false, error };
   }
+}
+
+function normalizeChatId(value: string) {
+  const id = value.trim();
+  if (!id) return id;
+  return /^(@|-?\d)/.test(id) ? id : `@${id}`;
 }
 
 function buildMessage(fields: Record<string, FirestoreValue>, propertyId: string) {
@@ -280,32 +310,47 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const message = buildMessage(fields, propertyId);
     const imageUrl = firstImageUrl(fields);
 
+    // اختيار البوت والقناة حسب نوع الإعلان (بيع / إيجار)
+    const isRent = isRentListing(fields);
+    const target = telegramTargetFor(isRent);
+    const botToken = target.botToken;
+    const chatId = normalizeChatId(target.chatId);
+    const channelType = isRent ? 'rent' : 'sale';
+    const errors: string[] = [];
+
     // إرسال الصورة في الأعلى ومعها تفاصيل الشقة الكاملة كـ caption
     if (imageUrl && message.length <= TELEGRAM_CAPTION_LIMIT) {
-      const sentAsPhoto = await sendTelegram(FIXED_BOT_TOKEN, 'sendPhoto', {
-        chat_id: FIXED_CHAT_ID,
+      const photoResult = await sendTelegram(botToken, 'sendPhoto', {
+        chat_id: chatId,
         photo: imageUrl,
         caption: message,
         parse_mode: 'HTML',
       });
-      if (sentAsPhoto) {
-        return res.status(200).json({ sent: true, method: 'sendPhoto' });
+      if (photoResult.ok) {
+        return res.status(200).json({ sent: true, method: 'sendPhoto', channel: channelType });
       }
+      if (photoResult.error) errors.push(photoResult.error);
     }
 
     // بديل احتياطي إذا حدثت مشكلة في الصورة
-    const sentAsText = await sendTelegram(FIXED_BOT_TOKEN, 'sendMessage', {
-      chat_id: FIXED_CHAT_ID,
+    const textResult = await sendTelegram(botToken, 'sendMessage', {
+      chat_id: chatId,
       text: message,
       parse_mode: 'HTML',
       disable_web_page_preview: true,
     });
 
-    if (!sentAsText) {
-      return res.status(502).json({ error: 'Telegram rejected the message' });
+    if (!textResult.ok) {
+      if (textResult.error) errors.push(textResult.error);
+      return res.status(502).json({
+        error: 'Telegram rejected the message',
+        channel: channelType,
+        chatId,
+        details: errors,
+      });
     }
 
-    return res.status(200).json({ sent: true, method: 'sendMessage' });
+    return res.status(200).json({ sent: true, method: 'sendMessage', channel: channelType });
   } catch (err) {
     return res.status(502).json({ error: 'Notification service unavailable', details: String(err) });
   }

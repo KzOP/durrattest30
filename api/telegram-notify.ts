@@ -32,15 +32,19 @@ type TelegramTarget = { botToken: string; chatId: string };
 
 function telegramTargetFor(isRent: boolean): TelegramTarget {
   const env = process.env;
+  const saleToken = (env.TELEGRAM_SALE_BOT_TOKEN || '').trim();
+  const saleChat = (env.TELEGRAM_SALE_CHAT_ID || '').trim();
+  const rentToken = (env.TELEGRAM_RENT_BOT_TOKEN || '').trim();
+  const rentChat = (env.TELEGRAM_RENT_CHAT_ID || '').trim();
   if (isRent) {
     return {
-      botToken: (env.TELEGRAM_RENT_BOT_TOKEN || '').trim() || FALLBACK_BOT_TOKEN,
-      chatId: (env.TELEGRAM_RENT_CHAT_ID || '').trim() || FALLBACK_CHAT_ID,
+      botToken: rentToken || saleToken || FALLBACK_BOT_TOKEN,
+      chatId: rentChat || saleChat || FALLBACK_CHAT_ID,
     };
   }
   return {
-    botToken: (env.TELEGRAM_SALE_BOT_TOKEN || '').trim() || FALLBACK_BOT_TOKEN,
-    chatId: (env.TELEGRAM_SALE_CHAT_ID || '').trim() || FALLBACK_CHAT_ID,
+    botToken: saleToken || rentToken || FALLBACK_BOT_TOKEN,
+    chatId: saleChat || rentChat || FALLBACK_CHAT_ID,
   };
 }
 
@@ -116,6 +120,9 @@ function rentPeriodFromFields(fields: Record<string, FirestoreValue>): RentPerio
 }
 
 function isRentListing(fields: Record<string, FirestoreValue>) {
+  const exact = stringField(fields, 'listing_type').trim().toLowerCase();
+  if (exact === 'rent') return true;
+  if (exact === 'sale') return false;
   const listingFields = ['listing_type', 'listingType', 'subType', 'offerType', 'offer_type'];
   const values = listingFields.map((name) => stringField(fields, name).trim()).filter(Boolean);
   const recognized = values.find((value) => isRentLabel(value) || isSaleLabel(value));
@@ -299,12 +306,29 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/properties/${encodeURIComponent(propertyId)}`;
-    const propertyResponse = await fetch(firestoreUrl);
-    
+    const authHeader = req.headers.authorization;
+    const propertyResponse = await fetch(firestoreUrl, {
+      headers: typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+        ? { Authorization: authHeader }
+        : {},
+    });
+
     let fields: Record<string, FirestoreValue> = {};
     if (propertyResponse.ok) {
       const property = await propertyResponse.json() as FirestoreDocument;
       fields = property.fields ?? {};
+    } else {
+      console.error('Firestore read failed', propertyResponse.status);
+    }
+
+    // نوع الإعلان المرسل من الموقع له الأولوية لضمان التوجيه الصحيح
+    const bodyListingType = body?.listingType;
+    if (bodyListingType === 'rent' || bodyListingType === 'sale') {
+      fields.listing_type = { stringValue: bodyListingType };
+    }
+    const bodyRentPeriod = body?.rentPeriod;
+    if (!fields.rent_period && typeof bodyRentPeriod === 'string') {
+      fields.rent_period = { stringValue: bodyRentPeriod };
     }
 
     const message = buildMessage(fields, propertyId);

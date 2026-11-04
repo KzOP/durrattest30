@@ -25,7 +25,6 @@ const PRODUCTION_APP_URL = 'https://durrattest23.vercel.app';
 const FALLBACK_BOT_TOKEN = '8976569747:AAGpQBVcgO-kBEc7FNW9KZdvzTvnE-PF1js';
 const FALLBACK_CHAT_ID = '@durrattest';
 
-// تحديد بوت البيع أو الإيجار بناءً على نوع العقار
 function targetBotToken(isRent: boolean) {
   const specific = isRent ? process.env.TELEGRAM_RENT_BOT_TOKEN : process.env.TELEGRAM_SALE_BOT_TOKEN;
   return specific?.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim() || FALLBACK_BOT_TOKEN;
@@ -234,7 +233,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   const body = parseBody(req.body);
   const propertyId = body?.propertyId;
   
-  gt
   if (typeof propertyId !== 'string' || !propertyId) {
     return res.status(400).json({ error: 'Invalid property ID' });
   }
@@ -243,7 +241,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/properties/${encodeURIComponent(propertyId)}`;
-    const propertyResponse = await fetch(firestoreURL);
+    const propertyResponse = await fetch(firestoreUrl);
     
     let fields: Record<string, FirestoreValue> = {};
     if (!propertyResponse.ok) {
@@ -256,7 +254,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const message = buildMessage(fields, propertyId);
     const isRent = isRentListing(fields);
     
-    // استخدام التوكن المستقل للإيجار أو البيع
     const botToken = targetBotToken(isRent);
     const chatId = targetChatId(isRent);
 

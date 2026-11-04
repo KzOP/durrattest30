@@ -21,23 +21,27 @@ type FirestoreDocument = {
 
 type RentPeriod = 'monthly' | 'annual' | 'two_installments';
 
-const PRODUCTION_APP_URL = 'https://durrattest23.vercel.app';
+const PRODUCTION_APP_URL = 'https://durrattest25.vercel.app';
 const TELEGRAM_CAPTION_LIMIT = 1024;
 
-// القيم الاحتياطية القديمة لضمان عدم توقف النظام أبداً
+// القيم الاحتياطية (تُستخدم فقط إذا لم تُضبط متغيرات البيئة في Vercel)
 const FALLBACK_BOT_TOKEN = '8976569747:AAGpQBVcgO-kBEc7FNW9KZdvzTvnE-PF1js';
 const FALLBACK_CHAT_ID = '@durrattest';
 
-// تحديد التوكن (البوت) بناءً على نوع العقار (إيجار أم بيع)
-function targetBotToken(isRent: boolean) {
-  const specific = isRent ? process.env.TELEGRAM_RENT_BOT_TOKEN : process.env.TELEGRAM_SALE_BOT_TOKEN;
-  return specific?.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim() || FALLBACK_BOT_TOKEN;
-}
+type TelegramTarget = { botToken: string; chatId: string };
 
-// تحديد الآيدي (القناة) بناءً على نوع العقار (إيجار أم بيع)
-function targetChatId(isRent: boolean) {
-  const specific = isRent ? process.env.TELEGRAM_RENT_CHAT_ID : process.env.TELEGRAM_SALE_CHAT_ID;
-  return specific?.trim() || process.env.TELEGRAM_CHAT_ID?.trim() || FALLBACK_CHAT_ID;
+function telegramTargetFor(isRent: boolean): TelegramTarget {
+  const env = process.env;
+  if (isRent) {
+    return {
+      botToken: (env.TELEGRAM_RENT_BOT_TOKEN || '').trim() || FALLBACK_BOT_TOKEN,
+      chatId: (env.TELEGRAM_RENT_CHAT_ID || '').trim() || FALLBACK_CHAT_ID,
+    };
+  }
+  return {
+    botToken: (env.TELEGRAM_SALE_BOT_TOKEN || '').trim() || FALLBACK_BOT_TOKEN,
+    chatId: (env.TELEGRAM_SALE_CHAT_ID || '').trim() || FALLBACK_CHAT_ID,
+  };
 }
 
 const rentPeriodPriceText: Record<RentPeriod, string> = {
@@ -189,6 +193,7 @@ function firstImageUrl(fields: Record<string, FirestoreValue>) {
     const url = extractImageUrl(fields[key]);
     if (url && !url.includes('durrattest23.vercel.app')) return url;
   }
+  // صورة افتراضية للعقار في حال لم يتم رفع صورة لضمان عدم فشل الإرسال أبداً
   return 'https://images.unsplash.com/photo-1560518883-ce09059eeffa';
 }
 
@@ -291,12 +296,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
     const message = buildMessage(fields, propertyId);
     const imageUrl = firstImageUrl(fields);
+
+    // اختيار البوت والقناة حسب نوع الإعلان (بيع / إيجار)
     const isRent = isRentListing(fields);
+    const { botToken, chatId } = telegramTargetFor(isRent);
+    const channelType = isRent ? 'rent' : 'sale';
 
-    // استخدام التوكن والقناة الخاصة بالإيجار أو البيع تلقائياً
-    const botToken = targetBotToken(isRent);
-    const chatId = targetChatId(isRent);
-
+    // إرسال الصورة في الأعلى ومعها تفاصيل الشقة الكاملة كـ caption
     if (imageUrl && message.length <= TELEGRAM_CAPTION_LIMIT) {
       const sentAsPhoto = await sendTelegram(botToken, 'sendPhoto', {
         chat_id: chatId,
@@ -305,10 +311,11 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         parse_mode: 'HTML',
       });
       if (sentAsPhoto) {
-        return res.status(200).json({ sent: true, channel: isRent ? 'rent' : 'sale', method: 'sendPhoto' });
+        return res.status(200).json({ sent: true, method: 'sendPhoto', channel: channelType });
       }
     }
 
+    // بديل احتياطي إذا حدثت مشكلة في الصورة
     const sentAsText = await sendTelegram(botToken, 'sendMessage', {
       chat_id: chatId,
       text: message,
@@ -317,10 +324,10 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     });
 
     if (!sentAsText) {
-      return res.status(502).json({ error: 'Telegram rejected the message', channel: isRent ? 'rent' : 'sale' });
+      return res.status(502).json({ error: 'Telegram rejected the message', channel: channelType });
     }
 
-    return res.status(200).json({ sent: true, channel: isRent ? 'rent' : 'sale', method: 'sendMessage' });
+    return res.status(200).json({ sent: true, method: 'sendMessage', channel: channelType });
   } catch (err) {
     return res.status(502).json({ error: 'Notification service unavailable', details: String(err) });
   }

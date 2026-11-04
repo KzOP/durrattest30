@@ -22,11 +22,14 @@ type FirestoreDocument = {
 type RentPeriod = 'monthly' | 'annual' | 'two_installments';
 
 const PRODUCTION_APP_URL = 'https://durrattest23.vercel.app';
-// Configure in Vercel → Settings → Environment Variables:
-// TELEGRAM_BOT_TOKEN, TELEGRAM_SALE_CHAT_ID, TELEGRAM_RENT_CHAT_ID.
-// The fallbacks below keep the old single channel working until those are set.
 const FALLBACK_BOT_TOKEN = '8976569747:AAGpQBVcgO-kBEc7FNW9KZdvzTvnE-PF1js';
 const FALLBACK_CHAT_ID = '@durrattest';
+
+// تحديد بوت البيع أو الإيجار بناءً على نوع العقار
+function targetBotToken(isRent: boolean) {
+  const specific = isRent ? process.env.TELEGRAM_RENT_BOT_TOKEN : process.env.TELEGRAM_SALE_BOT_TOKEN;
+  return specific?.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim() || FALLBACK_BOT_TOKEN;
+}
 
 function targetChatId(isRent: boolean) {
   const specific = isRent ? process.env.TELEGRAM_RENT_CHAT_ID : process.env.TELEGRAM_SALE_CHAT_ID;
@@ -101,10 +104,6 @@ function isRentLabel(value: string) {
   return /(?:^|[^a-z])(?:rent|rental|lease)(?:$|[^a-z])|(?:ايجار|استئجار|شهري|شهر|سنوي|سنة)|(?:^|[^a-z])(?:monthly|month|annual|yearly|year)(?:$|[^a-z])/i.test(normalizedLabel(value));
 }
 
-function isSaleLabel(value: string) {
-  return /(?:^|[^a-z])(?:sale|sell)(?:$|[^a-z])|بيع/i.test(normalizedLabel(value));
-}
-
 function rentPeriodFromFields(fields: Record<string, FirestoreValue>): RentPeriod {
   const value = stringField(fields, 'rent_period');
   if (value === 'monthly' || value === 'annual' || value === 'two_installments') return value;
@@ -114,8 +113,8 @@ function rentPeriodFromFields(fields: Record<string, FirestoreValue>): RentPerio
 function isRentListing(fields: Record<string, FirestoreValue>) {
   const listingFields = ['listing_type', 'listingType', 'subType', 'offerType', 'offer_type'];
   const values = listingFields.map((name) => stringField(fields, name).trim()).filter(Boolean);
-  const recognized = values.find((value) => isRentLabel(value) || isSaleLabel(value));
-  if (recognized) return isRentLabel(recognized);
+  const recognized = values.find((value) => isRentLabel(value));
+  if (recognized) return true;
   return values.some((value) => /(?:^|[^a-z])(?:monthly|month|annual|yearly|year)(?:$|[^a-z])|شهري|شهر|سنوي|سنة/i.test(normalizedLabel(value)));
 }
 
@@ -206,7 +205,6 @@ function buildMessage(fields: Record<string, FirestoreValue>, propertyId: string
       })
     : [];
 
-  // كتابة الرابط بشكل نصي صريح في نهاية الرسالة لكي يتمكن تيليجرام من توليد المعاينة (Preview) تلقائياً
   return [
     `عرض عقاري جديد | ${escapeHtml(title)}`,
     `النوع: ${escapeHtml(propertyType)} — ${escapeHtml(listingLabel)}`,
@@ -236,6 +234,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   const body = parseBody(req.body);
   const propertyId = body?.propertyId;
   
+  gt
   if (typeof propertyId !== 'string' || !propertyId) {
     return res.status(400).json({ error: 'Invalid property ID' });
   }
@@ -244,7 +243,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/properties/${encodeURIComponent(propertyId)}`;
-    const propertyResponse = await fetch(firestoreUrl);
+    const propertyResponse = await fetch(firestoreURL);
     
     let fields: Record<string, FirestoreValue> = {};
     if (!propertyResponse.ok) {
@@ -255,19 +254,19 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     }
 
     const message = buildMessage(fields, propertyId);
-
-    // إرسال رسالة نصية مع السماح لمعاينة الرابط (Preview) بالظهور تلقائياً لتظهر صورة الموقع في الأسفل
     const isRent = isRentListing(fields);
-    const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim() || FALLBACK_BOT_TOKEN;
+    
+    // استخدام التوكن المستقل للإيجار أو البيع
+    const botToken = targetBotToken(isRent);
+    const chatId = targetChatId(isRent);
+
     const sent = await sendTelegram(botToken, {
-      chat_id: targetChatId(isRent),
+      chat_id: chatId,
       text: message,
       parse_mode: 'HTML',
       disable_web_page_preview: false,
     });
 
-    if (!process.env.TELEGRAM_BOT_TOKEN) console.error('[telegram-notify] TELEGRAM_BOT_TOKEN is not set in Vercel; using fallback token');
-    if (!process.env[isRent ? 'TELEGRAM_RENT_CHAT_ID' : 'TELEGRAM_SALE_CHAT_ID']) console.error(`[telegram-notify] ${isRent ? 'TELEGRAM_RENT_CHAT_ID' : 'TELEGRAM_SALE_CHAT_ID'} is not set in Vercel; using fallback channel`);
     if (!sent.ok) {
       return res.status(502).json({ error: 'Telegram rejected the message', details: sent.detail, channel: isRent ? 'rent' : 'sale' });
     }

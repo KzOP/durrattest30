@@ -159,7 +159,7 @@ export function StaffManager({ currentStaffId }: { currentStaffId: string }) {
               <b>{employee.displayName || 'بدون اسم'}</b>
               <small>{employee.role === 'super_admin' ? 'إدارة عامة' : 'موظف'}</small>
             </div>
-            <span dir="ltr">{employee.email || employee.phone}{employee.email && employee.phone ? ` · ${employee.phone}` : ''}</span>
+            <span dir="ltr">{employee.phone || (employee.email.endsWith('@durrat.internal') ? employee.email.replace('@durrat.internal', '') : employee.email)}</span>
             {editingId === employee.id ? (
               <input value={draftName} maxLength={80} onChange={(event) => setDraftName(event.target.value)} aria-label="الاسم الظاهر" />
             ) : <span />}

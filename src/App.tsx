@@ -148,7 +148,6 @@ function loginEmail(identifier: string) {
   const value = identifier.trim().toLowerCase();
   if (value.includes('@')) return value;
   const digits = value.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/\D/g, '');
-  if (digits === ADMIN_PHONE) return ADMIN_EMAILS[0];
   return `${digits}@durrat.internal`;
 }
 

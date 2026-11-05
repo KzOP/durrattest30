@@ -201,7 +201,7 @@ function firstImageUrl(fields: Record<string, FirestoreValue>) {
     if (url && !url.includes('durrattest23.vercel.app')) return url;
   }
   // صورة افتراضية للعقار في حال لم يتم رفع صورة لضمان عدم فشل الإرسال أبداً
-  return 'https://images.unsplash.com/photo-1560518883-ce09059eeffa';
+  return 'https://kommodo.ai/i/HyR58SlhDKy8AyuOuI8O';
 }
 
 function parseBody(body: unknown): Record<string, unknown> | null {
